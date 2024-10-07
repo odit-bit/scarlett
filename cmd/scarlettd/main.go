@@ -90,14 +90,15 @@ func main() {
 
 	//node http server
 	hs := rest.NewServer(s, logger, clstr)
-	defer hs.Stop()
+	rest.AddStore(&hs)
 	go hs.Serve(httpL, tc)
+	defer hs.Stop()
 
 	//cluster grpc server
 	cs := cluster.NewService(config.RaftAddr, s)
 	cs.SetLogger(logger)
-	defer cs.Stop()
 	go cs.Run(grpcL, nil)
+	defer cs.Stop()
 
 	// connection listener
 	go func() {
