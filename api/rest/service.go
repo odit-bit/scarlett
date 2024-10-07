@@ -34,12 +34,6 @@ type Service struct {
 }
 
 func NewServer(db *store.Store, l *slog.Logger, clstr ClusterClient) Service {
-	var err error
-
-	if err != nil {
-		l.Error(err.Error())
-		return Service{}
-	}
 
 	router := Service{
 		logger:  l,
