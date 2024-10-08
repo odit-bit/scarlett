@@ -53,7 +53,19 @@ func NewServer(db *store.Store, l *slog.Logger, clstr ClusterClient) Service {
 // run will running blocked http server.
 func (h *Service) Run(addr string, conf *tls.Config) error {
 	//node http server
-	h.srv = &http.Server{Addr: addr, Handler: h.mux, ErrorLog: slog.NewLogLogger(h.logger.Handler(), slog.LevelInfo), TLSConfig: conf}
+	h.srv = &http.Server{
+		Addr:                         addr,
+		Handler:                      h.mux,
+		DisableGeneralOptionsHandler: false,
+		TLSConfig:                    conf,
+		ReadTimeout:                  5 * time.Second,
+		ReadHeaderTimeout:            0,
+		WriteTimeout:                 5 * time.Second,
+		IdleTimeout:                  20 * time.Second,
+		MaxHeaderBytes:               1024,
+		TLSNextProto:                 map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ErrorLog:                     slog.NewLogLogger(h.logger.Handler(), slog.LevelInfo),
+	}
 	h.errCh <- h.srv.ListenAndServe()
 	close(h.errCh)
 

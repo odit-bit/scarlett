@@ -14,6 +14,7 @@ import (
 	"github.com/odit-bit/scarlett/store/backend"
 	"github.com/odit-bit/scarlett/tcp"
 	"github.com/soheilhy/cmux"
+	"golang.org/x/net/netutil"
 )
 
 func main() {
@@ -30,7 +31,6 @@ func main() {
 	}))
 
 	// Listener
-	// todo: add tls/security
 	// tls config defined for future needed.
 	tc := tcp.DefaultTLSConfig()
 	listener, err := net.Listen("tcp", config.RaftAddr)
@@ -39,6 +39,7 @@ func main() {
 		return
 	}
 	defer listener.Close()
+	listener = netutil.LimitListener(listener, config.MaxConn)
 
 	// multiplex listener for rpc
 	// cluster service and raft will listen the same port but with their own protocol,

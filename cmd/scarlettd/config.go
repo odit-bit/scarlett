@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 )
 
+const (
+	_Default_Max_Conn = 100
+)
+
 func loadRaftAddr(raftAddr string) string {
 
 	host, port, err := net.SplitHostPort(raftAddr)
@@ -65,28 +69,35 @@ type Config struct {
 
 	IsBoostrap bool
 	IsPurge    bool
+
+	//max conn for incoming traffic conn
+	MaxConn int
 }
 
 func loadConfig() Config {
 	var nodeDir string
 	// var httpAddr string
-	var raftAddr string
+	var host string
+	var port int
 	var joinAddr string
 	var nodeID string
 	var bootstrap, purge bool
 
 	flag.StringVar(&nodeID, "name", "", "unique name to identified this node")
 	// flag.StringVar(&httpAddr, "http", "localhost:8080", "http port listen")
-	flag.StringVar(&raftAddr, "addr", "localhost:8080", "bind address")
+	flag.StringVar(&host, "host", "localhost", "bind address")
+	flag.IntVar(&port, "port", 8001, "bind address")
 
 	flag.BoolVar(&bootstrap, "bootstrap", false, "start with bootstrap node")
 	flag.BoolVar(&purge, "purge", false, "purge raft node data")
 
 	flag.StringVar(&joinAddr, "join", "", "node address to join")
 	flag.StringVar(&nodeDir, "raft-dir", "", "dir use for raft persistence")
+
+	maxConn := flag.Int("limit", _Default_Max_Conn, "maximum incoming conn")
 	flag.Parse()
 
-	// httpAddr = loadHttpAddr(httpAddr)
+	raftAddr := fmt.Sprintf("%s:%d", host, port)
 	raftAddr = loadRaftAddr(raftAddr)
 	if joinAddr != "" {
 		joinAddr = loadRaftAddr(joinAddr)
@@ -100,13 +111,13 @@ func loadConfig() Config {
 	}
 
 	return Config{
-		ID:       nodeID,
-		StoreDir: storeDir,
-		RaftDir:  nodeDir,
-		// HttpAddr:     httpAddr,
+		ID:           nodeID,
+		StoreDir:     storeDir,
+		RaftDir:      nodeDir,
 		RaftAddr:     raftAddr,
 		RaftJoinAddr: joinAddr,
 		IsBoostrap:   bootstrap,
 		IsPurge:      purge,
+		MaxConn:      *maxConn,
 	}
 }

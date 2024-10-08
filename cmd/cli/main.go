@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 
 	"github.com/odit-bit/scarlett/api/cluster"
-	"github.com/odit-bit/scarlett/api/rest"
 	"github.com/spf13/cobra"
 )
 
@@ -73,9 +72,8 @@ type GetResponse struct {
 }
 
 func (c *Client) Get(ctx context.Context, key string, v *GetResponse) error {
-	m := rest.APIRoute
-	r := m[rest.QUERY_API]
-	method, path := r.Route()
+	method := http.MethodGet
+	path := "/query"
 	addr := c.clusterAddr[0]
 
 	fullpath := filepath.Join(addr, path)
@@ -140,7 +138,6 @@ var SetCmd = cobra.Command{
 		} else {
 			fmt.Println(res)
 		}
-
 
 	},
 }

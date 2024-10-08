@@ -12,29 +12,29 @@ type API interface {
 	Route() (method, path string)
 }
 
-var APIRoute = map[string]API{
-	JOIN_API:    &JoinRoute{},
-	COMMAND_API: &CommandRoute{},
-	QUERY_API:   &QueryRoute{},
-}
+// var APIRoute = map[string]API{
+// 	JOIN_API:    &JoinRoute{},
+// 	COMMAND_API: &CommandRoute{},
+// 	QUERY_API:   &QueryRoute{},
+// }
 
-type JoinRoute struct{}
+// type JoinRoute struct{}
 
-func (jr *JoinRoute) Route() (string, string) {
-	return http.MethodGet, "/join"
-}
+// func (jr *JoinRoute) Route() (string, string) {
+// 	return http.MethodGet, "/join"
+// }
 
-type CommandRoute struct{}
+// type CommandRoute struct{}
 
-func (cr *CommandRoute) Route() (string, string) {
-	return http.MethodPost, "/command"
-}
+// func (cr *CommandRoute) Route() (string, string) {
+// 	return http.MethodPost, "/command"
+// }
 
-type QueryRoute struct{}
+// type QueryRoute struct{}
 
-func (qr *QueryRoute) Route() (string, string) {
-	return http.MethodGet, "/query"
-}
+// func (qr *QueryRoute) Route() (string, string) {
+// 	return http.MethodGet, "/query"
+// }
 
 type RaftJoinRequest struct {
 	NodeID  string

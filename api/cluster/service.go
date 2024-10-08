@@ -14,8 +14,10 @@ import (
 	"github.com/odit-bit/scarlett/store"
 	storeproto "github.com/odit-bit/scarlett/store/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	// "google.golang.org/grpc/status"
 )
 
@@ -63,7 +65,6 @@ func (s *Service) runTLS(l net.Listener, tc *tls.Config) error {
 	//option
 	cred := grpc.Creds(credsFromConfig(tc))
 	interceptor := grpc.ChainUnaryInterceptor(UnaryLogInterceptor)
-	// maxConn := ratelimit.UnaryServerInterceptor(ratelimit.NewLimiter)
 	//server
 	s.srv = grpc.NewServer(cred, interceptor)
 	clusterProto.RegisterClusterServer(s.srv, s)
@@ -124,8 +125,13 @@ func (s *Service) GetNodeApiUrl(ctx context.Context, in *clusterProto.Request) (
 
 func (s *Service) Command(ctx context.Context, in *storeproto.CmdRequest) (*storeproto.CmdResponse, error) {
 	out := new(storeproto.CmdResponse)
-	if err := s.store.CommandRPC(in, out); err != nil {
-		return nil, err
+	if err := s.store.CommandRPC(in, out, 1*time.Second); err != nil {
+		switch err {
+		case store.ErrTimeout:
+			return nil, status.Errorf(codes.DeadlineExceeded, err.Error())
+		default:
+			return nil, err
+		}
 	}
 
 	return out, nil

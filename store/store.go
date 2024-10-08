@@ -291,10 +291,17 @@ func (s *Store) Close() error {
 	}
 }
 
-func (s *Store) CommandRPC(in *storeproto.CmdRequest, out *storeproto.CmdResponse) error {
+var (
+	ErrTimeout = errors.New("raft apply log to node is timeout")
+)
 
-	f := s.raft.Apply(in.Payload, 2*time.Second)
+func (s *Store) CommandRPC(in *storeproto.CmdRequest, out *storeproto.CmdResponse, timeout time.Duration) error {
+
+	f := s.raft.Apply(in.Payload, timeout)
 	if f.Error() != nil {
+		if f.Error().Error() == raft.ErrEnqueueTimeout.Error() {
+			return ErrTimeout
+		}
 		return f.Error()
 	}
 

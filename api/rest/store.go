@@ -19,21 +19,8 @@ func AddStore(svc *Service) {
 		mux: svc.mux,
 	}
 
-	for k, v := range APIRoute {
-		m, p := v.Route()
-		switch k {
-
-		case COMMAND_API:
-			router.handleCommand(m, p, svc.store, svc.cluster)
-			// router.routes["command"] = fmt.Sprintf("%s %s", m, p)
-
-		case QUERY_API:
-			router.handleQuery(m, p, svc.store)
-			// router.routes["query"] = fmt.Sprintf("%s %s", m, p)
-
-		}
-	}
-
+	router.handleCommand(http.MethodPost, "/command", svc.store, svc.cluster)
+	router.handleQuery(http.MethodGet, "/query", svc.store)
 }
 
 func (s *storeService) handleCommand(method, path string, db *store.Store, clstr ClusterClient) {
