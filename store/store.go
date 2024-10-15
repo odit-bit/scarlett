@@ -65,7 +65,7 @@ func New(id, addr, httpAddr string, fn ...Options) (*Store, error) {
 	)
 	opts.logger.Debug("setup raft transport is done")
 
-	node, err := newRaftNode(id, opts.dir, opts.applyTimeout, kv, tr.Transport())
+	node, err := newRaftNode(id, opts.dir, opts.applyTimeout, kv, tr.Transport(), opts.loglevel)
 	if err != nil {
 		return nil, err
 	}

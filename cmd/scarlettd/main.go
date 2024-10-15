@@ -42,7 +42,7 @@ func main() {
 		config.RaftAddr,
 		config.HttpAddr,
 		store.WithBootstraping(config.IsBoostrap),
-		store.WithLogger(logger),
+		store.WithSlog(slogLevelFromInt(config.LogLevel)),
 		store.WithPurge(config.IsPurge),
 		store.CustomDir(config.BaseDir),
 	)

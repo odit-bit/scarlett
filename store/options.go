@@ -9,7 +9,9 @@ import (
 var (
 	defaultStoreDir     = "/tmp/scarlett"
 	defaultApplyTimeout = 2 * time.Second
-	defaultLogger       = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	defaultLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	_             = defaultLogger
 )
 
 type Options func(*storeOptions)
@@ -17,6 +19,7 @@ type Options func(*storeOptions)
 var defaultOption = storeOptions{
 	dir:          defaultStoreDir,
 	logger:       defaultLogger,
+	loglevel:     int(slog.LevelInfo),
 	applyTimeout: 2 * time.Second,
 	isBootstrap:  false,
 	isPurge:      false,
@@ -26,6 +29,7 @@ type storeOptions struct {
 	dir string
 
 	logger       *slog.Logger
+	loglevel     int
 	applyTimeout time.Duration
 
 	isBootstrap bool
@@ -35,6 +39,14 @@ type storeOptions struct {
 func WithLogger(logger *slog.Logger) Options {
 	return func(c *storeOptions) {
 		c.logger = logger.With("scope", "store-raft")
+	}
+}
+
+func WithSlog(level slog.Level) Options {
+	return func(so *storeOptions) {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+		so.logger = logger.With("scope", "store-raft")
+		so.loglevel = int(level)
 	}
 }
 

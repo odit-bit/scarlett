@@ -95,7 +95,7 @@ func loadConfig() Config {
 	flag.BoolVar(&bootstrap, "bootstrap", false, "start with bootstrap node")
 	flag.BoolVar(&purge, "purge", false, "purge raft node data")
 
-	flag.IntVar(&logLevel, "log", 3, "log level verbose 0 - 3, default 3 (most verbose)")
+	flag.IntVar(&logLevel, "log", 2, "log level verbose 0 - 3, default 2 (most verbose)")
 
 	maxConn := flag.Int("limit", _Default_Max_Conn, "maximum incoming conn")
 	flag.Parse()

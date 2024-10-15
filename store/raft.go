@@ -13,6 +13,22 @@ import (
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
+func convertSlogToHclog(n slog.Level) hclog.Level {
+	level := hclog.Error
+
+	switch n {
+	case slog.LevelDebug:
+		level = hclog.Debug
+	case slog.LevelInfo:
+		level = hclog.Info
+	case slog.LevelWarn:
+		level = hclog.Warn
+	}
+
+	return level
+
+}
+
 // wrap the underlying raft implementation
 type raftWrapper struct {
 	applyTimeout time.Duration
@@ -20,12 +36,12 @@ type raftWrapper struct {
 	*raft.Raft
 }
 
-func newRaftNode(id, dir string, timeout time.Duration, kv raft.FSM, tr raft.Transport) (*raftWrapper, error) {
+func newRaftNode(id, dir string, timeout time.Duration, kv raft.FSM, tr raft.Transport, loglevel int) (*raftWrapper, error) {
 
 	raftLogger := hclog.New(&hclog.LoggerOptions{
 		Name:   "scarlett.raft",
 		Output: os.Stderr,
-		Level:  hclog.Error,
+		Level:  convertSlogToHclog(slog.Level(loglevel)),
 	})
 
 	// dir for persist raft data
