@@ -60,7 +60,7 @@ curl --request GET --url http://localhost:9001/query --data '{"cmd":"get","key":
 
 send request to endpoint for delete (state).
 ``` 
-curl --request GET --url http://localhost:9001/command --data '{"cmd":"delete","key":"my-awesome-key"}'
+curl --request POST --url http://localhost:9001/command --data '{"cmd":"delete","key":"my-awesome-key"}'
 ```
 
 
