@@ -2,79 +2,90 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/odit-bit/scarlett/api/cluster"
+	// grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
+	"github.com/odit-bit/scarlett/store/storepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func generateKeyValueData(dur time.Duration, size int, addr string) {
 	sigC := make(chan os.Signal, 1)
 	signal.Notify(sigC, syscall.SIGINT)
 
-	cli, err := cluster.NewClient()
-	if err != nil {
-		panic(err)
+	//retry
+	retryOpts := []grpc_retry.CallOption{
+		grpc_retry.WithBackoff(grpc_retry.BackoffExponential(100 * time.Millisecond)),
+		grpc_retry.WithMax(3), // Give up after 5 retries.
 	}
+	retry := grpc.WithUnaryInterceptor(grpc_retry.UnaryClientInterceptor(retryOpts...))
 
-	data := make([]byte, size)
-	count := -1
-	keys := ""
-	errCount := 0
+	// credentials
+	creds := grpc.WithTransportCredentials(insecure.NewCredentials())
+
+	// client instance
+	// log.Println(addr)
+	conn, err := grpc.NewClient(
+		addr,
+		creds,
+		retry,
+	)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer conn.Close()
+	fmt.Println(conn.GetState().String())
+
+	// exec command
+	cli := storepb.NewCommandClient(conn)
+
+	// data := bytes.Repeat([]byte{'x'}, size)
+	count := atomic.Int64{}
+	keys := "fizz"
 	timer := time.NewTimer(dur)
-	for {
-		count++
-		select {
-		case <-timer.C:
-		case <-sigC:
-			log.Println("got signal, shutdown")
-		default:
-			if count%500 == 0 {
-				log.Println("current :", count)
-			}
-			if count%2 == 0 {
-				keys = "fizz"
-			} else if count%3 == 0 {
-				keys = "buzz"
-			} else {
-				keys = "fizzbuzz"
-			}
 
-			if _, err := rand.Read(data); err != nil {
-				panic(err)
-			}
-			ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
-			_, err := cli.Set(ctx, addr, keys, string(data))
-			if err != nil {
-				errCount++
-				if ctx.Err() != nil {
-					log.Println(ctx.Err())
-					continue
-				}
-				log.Fatalf("error %v, type %T", err, err)
-			}
+	pref := 0
+	key := fmt.Sprintf("%s-%v", keys, pref)
+	// value := fmt.Sprintf("%s-%v", data, pref)
+	req := storepb.SetRequest{
+		Cmd:   storepb.Command_Type_Set,
+		Key:   []byte(key),
+		Value: []byte(time.Now().String()),
+	}
+	for {
+
+		select {
+		case <-sigC:
+			log.Println("got signal")
+		case <-timer.C:
+			timer.Stop()
+			log.Println("finish")
+		default:
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			_, err := cli.Set(ctx, &req)
 			cancel()
-			// time.Sleep(1 * time.Millisecond)
-			continue
+			if err == nil {
+				count.Add(1)
+				continue
+			}
+			log.Println(err)
 		}
-		timer.Stop()
 		break
 	}
-	// _, err = cli.Set(context.TODO(), addr, "ulala", string(data))
-	// if err != nil {
-	// 	panic(err)
-	// }
 
 	close(sigC)
-	<-sigC
-	log.Println("succ-count", count)
-	log.Println("err-count", errCount)
+	log.Println("total-count", count.Load())
+
 }
 
 func main() {
@@ -84,5 +95,5 @@ func main() {
 	}
 	seconds := time.Duration(dur) * time.Second
 	fmt.Println("run for", seconds)
-	generateKeyValueData(seconds, 4096, os.Args[1])
+	generateKeyValueData(seconds, 1024, os.Args[1])
 }

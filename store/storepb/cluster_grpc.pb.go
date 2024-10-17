@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.2.0
 // - protoc             v3.6.1
-// source: cluster/proto/cluster.proto
+// source: store/storepb/cluster.proto
 
-package proto
+package storepb
 
 import (
 	context "context"
@@ -22,9 +22,9 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ClusterClient interface {
-	GetNodeApiUrl(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
-	GetNodeRaftAddr(ctx context.Context, in *NodeRaftAddrRequest, opts ...grpc.CallOption) (*NodeRaftAddrResponse, error)
+	Leader(ctx context.Context, in *LeaderRequest, opts ...grpc.CallOption) (*LeaderResponse, error)
 	Join(ctx context.Context, in *JoinRequest, opts ...grpc.CallOption) (*JoinResponse, error)
+	RemoveNode(ctx context.Context, in *RemoveRequest, opts ...grpc.CallOption) (*RemoveResponse, error)
 }
 
 type clusterClient struct {
@@ -35,18 +35,9 @@ func NewClusterClient(cc grpc.ClientConnInterface) ClusterClient {
 	return &clusterClient{cc}
 }
 
-func (c *clusterClient) GetNodeApiUrl(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
-	out := new(Response)
-	err := c.cc.Invoke(ctx, "/clusterproto.Cluster/GetNodeApiUrl", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *clusterClient) GetNodeRaftAddr(ctx context.Context, in *NodeRaftAddrRequest, opts ...grpc.CallOption) (*NodeRaftAddrResponse, error) {
-	out := new(NodeRaftAddrResponse)
-	err := c.cc.Invoke(ctx, "/clusterproto.Cluster/GetNodeRaftAddr", in, out, opts...)
+func (c *clusterClient) Leader(ctx context.Context, in *LeaderRequest, opts ...grpc.CallOption) (*LeaderResponse, error) {
+	out := new(LeaderResponse)
+	err := c.cc.Invoke(ctx, "/protoc.Cluster/Leader", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +46,16 @@ func (c *clusterClient) GetNodeRaftAddr(ctx context.Context, in *NodeRaftAddrReq
 
 func (c *clusterClient) Join(ctx context.Context, in *JoinRequest, opts ...grpc.CallOption) (*JoinResponse, error) {
 	out := new(JoinResponse)
-	err := c.cc.Invoke(ctx, "/clusterproto.Cluster/Join", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/protoc.Cluster/Join", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterClient) RemoveNode(ctx context.Context, in *RemoveRequest, opts ...grpc.CallOption) (*RemoveResponse, error) {
+	out := new(RemoveResponse)
+	err := c.cc.Invoke(ctx, "/protoc.Cluster/RemoveNode", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -66,9 +66,9 @@ func (c *clusterClient) Join(ctx context.Context, in *JoinRequest, opts ...grpc.
 // All implementations must embed UnimplementedClusterServer
 // for forward compatibility
 type ClusterServer interface {
-	GetNodeApiUrl(context.Context, *Request) (*Response, error)
-	GetNodeRaftAddr(context.Context, *NodeRaftAddrRequest) (*NodeRaftAddrResponse, error)
+	Leader(context.Context, *LeaderRequest) (*LeaderResponse, error)
 	Join(context.Context, *JoinRequest) (*JoinResponse, error)
+	RemoveNode(context.Context, *RemoveRequest) (*RemoveResponse, error)
 	mustEmbedUnimplementedClusterServer()
 }
 
@@ -76,14 +76,14 @@ type ClusterServer interface {
 type UnimplementedClusterServer struct {
 }
 
-func (UnimplementedClusterServer) GetNodeApiUrl(context.Context, *Request) (*Response, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetNodeApiUrl not implemented")
-}
-func (UnimplementedClusterServer) GetNodeRaftAddr(context.Context, *NodeRaftAddrRequest) (*NodeRaftAddrResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetNodeRaftAddr not implemented")
+func (UnimplementedClusterServer) Leader(context.Context, *LeaderRequest) (*LeaderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Leader not implemented")
 }
 func (UnimplementedClusterServer) Join(context.Context, *JoinRequest) (*JoinResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Join not implemented")
+}
+func (UnimplementedClusterServer) RemoveNode(context.Context, *RemoveRequest) (*RemoveResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveNode not implemented")
 }
 func (UnimplementedClusterServer) mustEmbedUnimplementedClusterServer() {}
 
@@ -98,38 +98,20 @@ func RegisterClusterServer(s grpc.ServiceRegistrar, srv ClusterServer) {
 	s.RegisterService(&Cluster_ServiceDesc, srv)
 }
 
-func _Cluster_GetNodeApiUrl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Request)
+func _Cluster_Leader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LeaderRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ClusterServer).GetNodeApiUrl(ctx, in)
+		return srv.(ClusterServer).Leader(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/clusterproto.Cluster/GetNodeApiUrl",
+		FullMethod: "/protoc.Cluster/Leader",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClusterServer).GetNodeApiUrl(ctx, req.(*Request))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Cluster_GetNodeRaftAddr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NodeRaftAddrRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClusterServer).GetNodeRaftAddr(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/clusterproto.Cluster/GetNodeRaftAddr",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClusterServer).GetNodeRaftAddr(ctx, req.(*NodeRaftAddrRequest))
+		return srv.(ClusterServer).Leader(ctx, req.(*LeaderRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -144,10 +126,28 @@ func _Cluster_Join_Handler(srv interface{}, ctx context.Context, dec func(interf
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/clusterproto.Cluster/Join",
+		FullMethod: "/protoc.Cluster/Join",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServer).Join(ctx, req.(*JoinRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Cluster_RemoveNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServer).RemoveNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/protoc.Cluster/RemoveNode",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServer).RemoveNode(ctx, req.(*RemoveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -156,22 +156,22 @@ func _Cluster_Join_Handler(srv interface{}, ctx context.Context, dec func(interf
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Cluster_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "clusterproto.Cluster",
+	ServiceName: "protoc.Cluster",
 	HandlerType: (*ClusterServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetNodeApiUrl",
-			Handler:    _Cluster_GetNodeApiUrl_Handler,
-		},
-		{
-			MethodName: "GetNodeRaftAddr",
-			Handler:    _Cluster_GetNodeRaftAddr_Handler,
+			MethodName: "Leader",
+			Handler:    _Cluster_Leader_Handler,
 		},
 		{
 			MethodName: "Join",
 			Handler:    _Cluster_Join_Handler,
 		},
+		{
+			MethodName: "RemoveNode",
+			Handler:    _Cluster_RemoveNode_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "cluster/proto/cluster.proto",
+	Metadata: "store/storepb/cluster.proto",
 }

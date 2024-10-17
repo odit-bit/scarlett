@@ -2,74 +2,55 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
-	"github.com/odit-bit/scarlett/api/cluster"
-	"github.com/odit-bit/scarlett/api/rest"
 	"github.com/odit-bit/scarlett/store"
-	"github.com/odit-bit/scarlett/store/backend"
-	"github.com/odit-bit/scarlett/tcp"
-	"github.com/soheilhy/cmux"
-	"golang.org/x/net/netutil"
+	"github.com/odit-bit/scarlett/store/api/rest"
+	"github.com/odit-bit/scarlett/store/storepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
-	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGTERM, syscall.SIGINT)
 
+	//config
 	config := loadConfig()
 
-	/*setup app*/
 	// logger
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		AddSource: false,
-		Level:     slog.LevelInfo,
+		Level:     slogLevelFromInt(config.LogLevel),
 	}))
+	mainLogger := logger.With("scope", "main")
 
-	// Listener
-	// tls config defined for future needed.
-	tc := tcp.DefaultTLSConfig()
-	listener, err := net.Listen("tcp", config.RaftAddr)
+	path, err := filepath.Abs(config.BaseDir)
 	if err != nil {
-		logger.Error(err.Error())
-		return
+		log.Fatal(err)
 	}
-	defer listener.Close()
-	listener = netutil.LimitListener(listener, config.MaxConn)
-
-	// multiplex listener for rpc
-	// cluster service and raft will listen the same port but with their own protocol,
-	// when listener accept, mux will match the protocol and create connection.
-	mux := cmux.New(listener)
-	httpL := mux.Match(cmux.HTTP1Fast()) // http api
-	grpcL := mux.Match(cmux.HTTP2())     // cluster-node api service
-	raftL := mux.Match(cmux.Any())       // raft-consensus
+	mainLogger.Info(fmt.Sprintf("dir path: %s", path))
 
 	//setup store
-	kv, err := backend.NewBadgerStore(config.StoreDir)
-	if err != nil {
-		logger.Error(err.Error())
-		return
-	}
-	defer kv.Close()
+	s, err := store.New(
+		config.ID,
+		config.RaftAddr,
+		config.HttpAddr,
+		store.WithBootstraping(config.IsBoostrap),
+		store.WithSlog(slogLevelFromInt(config.LogLevel)),
+		store.WithPurge(config.IsPurge),
+		store.CustomDir(config.BaseDir),
+	)
 
-	// TODO: for consistency hold incoming connection until the raft synced
-	s, err := createStore(raftL, kv, logger, store.Config{
-		RaftID:      config.ID,
-		RaftAddr:    config.RaftAddr,
-		RaftDir:     config.RaftDir,
-		IsBootstrap: config.IsBoostrap,
-		Purge:       config.IsPurge,
-	})
 	if err != nil {
-		logger.Error(err.Error())
+		mainLogger.Error(err.Error())
 		return
 	}
-	defer s.Close()
 
 	//should node join cluster
 	if config.RaftJoinAddr != "" {
@@ -77,63 +58,53 @@ func main() {
 			logger.Error(err.Error())
 			return
 		}
-		logger.Info("Success join cluster")
+		mainLogger.Info("Success join cluster")
 	}
 
 	/* service */
 
-	clstr, err := cluster.NewClient()
+	hSrv := rest.NewServer(s, logger)
+	rest.AddStore(&hSrv)
+	l, err := net.Listen("tcp", config.HttpAddr)
 	if err != nil {
-		logger.Error(err.Error())
+		mainLogger.Error(err.Error())
 		return
 	}
-	defer clstr.Close()
-
-	//node http server
-	hs := rest.NewServer(s, logger, clstr)
-	rest.AddStore(&hs)
-	go hs.Serve(httpL, tc)
-	defer hs.Stop()
-
-	//cluster grpc server
-	cs := cluster.NewService(config.RaftAddr, s)
-	cs.SetLogger(logger)
-	go cs.Run(grpcL, nil)
-	defer cs.Stop()
-
-	// connection listener
 	go func() {
-		if err := mux.Serve(); err != nil {
-			logger.Error(err.Error())
+		if err := hSrv.Serve(l, nil); err != nil {
+			mainLogger.Error(err.Error())
 		}
 	}()
+	defer hSrv.Stop()
+
+	sigC := make(chan os.Signal, 1)
+	signal.Notify(sigC, syscall.SIGTERM, syscall.SIGINT)
 
 	<-sigC
-	close(sigC)
-	mux.Close()
-	logger.Info("shutdown")
-
-}
-
-func createStore(raftL net.Listener, kv store.KV, logger *slog.Logger, config store.Config) (*store.Store, error) {
-	s, err := store.New(kv, raftL, config)
-	if err != nil {
-		logger.Error(err.Error())
-		return nil, err
-	}
-	if logger != nil {
-		s.SetLogger(logger)
+	mainLogger.Debug("closing...")
+	if err := s.Close(); err != nil {
+		mainLogger.Error(fmt.Sprintf("store-raft: %s", err.Error()))
 	}
 
-	return &s, nil
+	// close(sigC)
+	mainLogger.Info("shutdown")
 
 }
 
 func joinCluster(remoteJoinAddr, nodeAddr, nodeID string) error {
-	// log.Println("joining ", remoteJoinAddr, "node ", nodeID, "addr ", nodeAddr)
-	cc, err := cluster.NewClient()
+	conn, err := grpc.NewClient(remoteJoinAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
-	return cc.Join(context.Background(), remoteJoinAddr, nodeAddr, nodeID)
+	defer conn.Close()
+	cc := storepb.NewClusterClient(conn)
+	if _, err := cc.Join(context.Background(), &storepb.JoinRequest{
+		Address: nodeAddr,
+		Id:      nodeID,
+	}); err != nil {
+		return err
+	} else {
+		return nil
+	}
+
 }

@@ -2,7 +2,7 @@ package store
 
 import (
 	"errors"
-	"time"
+	// clusterpb "github.com/odit-bit/scarlett/store/api/cluster/proto"
 )
 
 const (
@@ -18,32 +18,14 @@ type QueryType string
 var ErrNotLeader = errors.New("only leader could change the state")
 
 type Command struct {
-	Cmd   string
-	Key   string
-	Value string
+	Cmd  string
+	Args [][]byte
 }
 
 type CommandResponse struct {
-	Cmd     string
 	Message string
-	Err     error
 }
 
 type QueryResponse struct {
-	Value     []byte
-	Message   string
-	ExpiredIn time.Duration
-	Err       error
+	Value []byte
 }
-
-// func unmarshalCommand(b []byte, cmd *Command) error {
-// 	err := json.Unmarshal(b, cmd)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return nil
-// }
-
-// func UnmarshalCommand(b []byte, cmd *Command) error {
-// 	return unmarshalCommand(b, cmd)
-// }

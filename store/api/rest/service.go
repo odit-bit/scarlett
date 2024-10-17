@@ -24,37 +24,35 @@ type Service struct {
 	mux *http.ServeMux
 	srv *http.Server
 
-	cluster ClusterClient
-	store   *store.Store
-	routes  map[string]string
+	// cluster ClusterClient
+	store *store.Store
+	// routes  map[string]string
 
 	errCh chan error
 
 	mutex *sync.Mutex
 }
 
-func NewServer(db *store.Store, l *slog.Logger, clstr ClusterClient) Service {
-
+func NewServer(db *store.Store, l *slog.Logger) Service {
 	router := Service{
-		logger:  l,
-		mux:     http.NewServeMux(),
-		srv:     &http.Server{},
-		cluster: clstr,
-		store:   db,
-		routes:  map[string]string{},
-		errCh:   make(chan error),
-		mutex:   &sync.Mutex{},
+		logger: l,
+		mux:    http.NewServeMux(),
+		srv:    &http.Server{},
+		// cluster: clstr,
+		store: db,
+		// routes:  map[string]string{},
+		errCh: make(chan error),
+		mutex: &sync.Mutex{},
 	}
 
 	return router
 
 }
 
-// run will running blocked http server.
-func (h *Service) Run(addr string, conf *tls.Config) error {
+func (h *Service) Serve(l net.Listener, conf *tls.Config) error {
 	//node http server
 	h.srv = &http.Server{
-		Addr:                         addr,
+		Addr:                         l.Addr().String(),
 		Handler:                      h.mux,
 		DisableGeneralOptionsHandler: false,
 		TLSConfig:                    conf,
@@ -63,18 +61,8 @@ func (h *Service) Run(addr string, conf *tls.Config) error {
 		WriteTimeout:                 5 * time.Second,
 		IdleTimeout:                  20 * time.Second,
 		MaxHeaderBytes:               1024,
-		TLSNextProto:                 map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ErrorLog:                     slog.NewLogLogger(h.logger.Handler(), slog.LevelInfo),
+		ErrorLog:                     slog.NewLogLogger(h.logger.Handler(), slog.LevelError),
 	}
-	h.errCh <- h.srv.ListenAndServe()
-	close(h.errCh)
-
-	return nil
-}
-
-func (h *Service) Serve(l net.Listener, conf *tls.Config) error {
-	//node http server
-	h.srv = &http.Server{Handler: h.mux, ErrorLog: slog.NewLogLogger(h.logger.Handler(), slog.LevelInfo), TLSConfig: conf}
 	h.errCh <- h.srv.Serve(l)
 	close(h.errCh)
 
@@ -94,6 +82,6 @@ func (h *Service) Stop() error {
 		err = errors.Join(err, e)
 	}
 
-	h.logger.Info("http-server-shutdown", "error", err)
+	
 	return err
 }

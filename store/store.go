@@ -5,391 +5,285 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	// clusterpb "github.com/odit-bit/scarlett/store/api/cluster/proto"
+
+	rpcTransport "github.com/Jille/raft-grpc-transport"
 	"github.com/hashicorp/raft"
-	raftBolt "github.com/hashicorp/raft-boltdb/v2"
-	storeproto "github.com/odit-bit/scarlett/store/proto"
+	"github.com/odit-bit/scarlett/store/backend"
+	"github.com/odit-bit/scarlett/store/storepb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/proto"
 )
-
-type KV interface {
-	Get(key []byte) ([]byte, bool, error)
-	// Set(key, value []byte, expired time.Duration) error
-	// Delete(key []byte) error
-
-	// Backup(w io.Writer) error
-	// Load(r io.Reader) error
-
-	raft.FSM
-}
-
-// type CLusterClient interface {
-// 	Join(ctx context.Context, joinAddr, nodeAddr, nodeID string) error
-// }
-
-type FSM interface {
-	raft.FSM
-}
-
-// Store wrap raft consensus.
-type Store struct {
-	id       string
-	raftAddr string
-
-	raft        *raft.Raft
-	tr          raft.Transport
-	logStore    raft.LogStore
-	snapStore   raft.SnapshotStore
-	stableStore raft.StableStore
-
-	// cluster CLusterClient
-
-	logger *slog.Logger
-
-	db KV
-
-	bootstrap bool
-	isClosed  bool
-	closers   []io.Closer
-}
-
-type Config struct {
-
-	// id for identified this node in cluster
-	RaftID string
-	// addr listen for raft protocol in cluster
-	RaftAddr string
-	// addr for persist raft data like 'log' or 'snapshot'
-	RaftDir string
-
-	// does this node bootstraped as cluster
-	IsBootstrap bool
-
-	// purge raft data when shutdown
-	Purge bool
-}
-
-func New(kv KV, listener net.Listener, config Config) (Store, error) {
-
-	sl := StreamLayer{
-		Listener: listener,
-	}
-
-	raftLogger := hclog.New(&hclog.LoggerOptions{
-		Name:   "scarlett-raft",
-		Output: os.Stderr,
-		Level:  hclog.Debug,
-	})
-	//transport
-	transport := raft.NewNetworkTransportWithLogger(&sl, 5, 10*time.Second, raftLogger)
-	// dir for persist raft data
-	snapshot, err := raft.NewFileSnapshotStore(config.RaftDir, 2, os.Stderr)
-	if err != nil {
-		return Store{}, err
-	}
-
-	// raft parameter
-	// log and stable store use bolt
-	bolt, err := raftBolt.NewBoltStore(filepath.Join(config.RaftDir, "raft_bolt"))
-	if err != nil {
-		return Store{}, err
-	}
-
-	//logger
-	l := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{}))
-	l = l.With("scope", "store")
-
-	//purge
-	var purger dirPurger
-	if config.Purge {
-		purger.dir = config.RaftDir
-	}
-
-	// raft
-	rconf := raft.DefaultConfig()
-	rconf.LocalID = raft.ServerID(config.RaftID)
-	rconf.Logger = raftLogger
-
-	rf, err := raft.NewRaft(rconf, kv, bolt, bolt, snapshot, transport)
-	if err != nil {
-		return Store{}, err
-	}
-
-	// instance store
-	s := Store{
-		id:          config.RaftID,
-		raftAddr:    config.RaftAddr,
-		raft:        rf,
-		tr:          transport,
-		logStore:    bolt,
-		snapStore:   snapshot,
-		stableStore: bolt,
-		logger:      l,
-		db:          kv,
-		bootstrap:   config.IsBootstrap,
-		isClosed:    false,
-		closers:     []io.Closer{bolt, &purger, transport},
-	}
-
-	if err := s.bootstraping(); err != nil {
-		return Store{}, err
-	}
-
-	return s, nil
-}
-
-func (s *Store) bootstraping() error {
-	if s.bootstrap {
-		bootstrapConfig := raft.Configuration{
-			Servers: []raft.Server{
-				{
-					ID:      raft.ServerID(s.id),
-					Address: s.tr.LocalAddr(),
-				},
-			},
-		}
-		f := s.raft.BootstrapCluster(bootstrapConfig)
-		bErr := f.Error()
-		if bErr != nil {
-			if bErr.Error() != raft.ErrCantBootstrap.Error() {
-				return bErr
-			}
-		}
-		// if err := s.AddNode(s.id, s.raftAddr); err != nil {
-		// 	return err
-		// }
-		ok := false
-		count := 0
-		for !ok && count != 3 {
-			addr, id := s.raft.LeaderWithID()
-			if addr == "" {
-				s.logger.Info("cluster not have leader")
-				time.Sleep(1 * time.Second)
-				//wait for vote
-			} else {
-				s.logger.Info("cluster leader", "addr", addr, "id", id)
-				ok = true
-			}
-			count++
-		}
-
-	}
-
-	s.logger.Info("cluster", "server", s.raft.GetConfiguration().Configuration().Servers)
-	return nil
-}
-
-func (s *Store) AddNonVoter(id, addr string) error {
-	f := s.raft.AddNonvoter(raft.ServerID(id), raft.ServerAddress(addr), 0, 0)
-	if f.Error() != nil {
-		return f.Error()
-	}
-	return nil
-}
-
-// add node into cluster
-func (s *Store) AddNode(nodeID, addr string) error {
-	s.logger.Info(fmt.Sprintf("received join request for remote node %s at %s", nodeID, addr))
-
-	configFuture := s.raft.GetConfiguration()
-	if err := configFuture.Error(); err != nil {
-		s.logger.Error(fmt.Sprintf("failed to get raft configuration: %v", err))
-		return err
-	}
-
-	for _, srv := range configFuture.Configuration().Servers {
-		// If a node already exists with either the joining node's ID or address,
-		// that node may need to be removed from the config first.
-		if srv.ID == raft.ServerID(nodeID) || srv.Address == raft.ServerAddress(addr) {
-			// However if *both* the ID and the address are the same, then nothing -- not even
-			// a join operation -- is needed.
-			if srv.Address == raft.ServerAddress(addr) && srv.ID == raft.ServerID(nodeID) {
-				s.logger.Error(fmt.Sprintf("node %s at %s already member of cluster, ignoring join request", nodeID, addr))
-				return nil
-			}
-
-			future := s.raft.RemoveServer(srv.ID, 0, 2*time.Second)
-			if err := future.Error(); err != nil {
-				return fmt.Errorf("error removing existing node %s at %s: %s", nodeID, addr, err)
-			} else {
-				s.logger.Info(fmt.Sprintf("remove-server id:%s, addr:%s \n", srv.ID, srv.Address))
-			}
-		}
-	}
-
-	future := s.raft.AddVoter(raft.ServerID(nodeID), raft.ServerAddress(addr), 0, 2*time.Second)
-	if future.Error() != nil {
-		return future.Error()
-	}
-
-	s.logger.Info(fmt.Sprintf("node %s at addr %s join succesfull", nodeID, addr))
-	return nil
-}
-
-func (s *Store) GetLeader() (string, string) {
-	addr, id := s.raft.LeaderWithID()
-	return string(addr), string(id)
-}
-
-type dirPurger struct {
-	dir string
-}
-
-func (p *dirPurger) Close() error {
-	if p.dir == "" {
-		return nil
-	}
-
-	return os.RemoveAll(p.dir)
-}
-
-func (s *Store) SetLogger(sl *slog.Logger) {
-	s.logger = sl
-}
-
-func (s *Store) Addr() string {
-	return s.raftAddr
-}
-
-func (s *Store) ID() string {
-	return s.id
-}
-
-func (s *Store) Close() error {
-
-	if !s.isClosed {
-		var err error
-
-		// // remove all servers
-		// // todo: make non-leader node to send this request to leader
-		// if s.raft.State() == raft.Leader {
-		// 	servers := s.raft.GetConfiguration().Configuration().Servers
-		// 	for _, server := range servers {
-		// 		f := s.raft.RemoveServer(server.ID, 0, 1*time.Second)
-		// 		err = errors.Join(err, f.Error())
-		// 	}
-		// }
-
-		err = errors.Join(s.raft.Shutdown().Error())
-		for _, c := range s.closers {
-			errors.Join(err, c.Close())
-		}
-
-		s.isClosed = true
-		if err != nil {
-			s.logger.Debug(err.Error())
-		}
-		return err
-	} else {
-		return fmt.Errorf("store closed")
-	}
-}
 
 var (
 	ErrTimeout = errors.New("raft apply log to node is timeout")
 )
 
-func (s *Store) CommandRPC(in *storeproto.CmdRequest, out *storeproto.CmdResponse, timeout time.Duration) error {
+type Backend interface {
+	Get(key []byte) ([]byte, bool, error)
+	io.Closer
+}
 
-	f := s.raft.Apply(in.Payload, timeout)
-	if f.Error() != nil {
-		if f.Error().Error() == raft.ErrEnqueueTimeout.Error() {
-			return ErrTimeout
+// Store provide Key-value db service.
+type Store struct {
+	opts *storeOptions
+	node *raftWrapper
+	db   Backend
+
+	raftAddr string
+	httpAddr string
+
+	errC       chan error
+	nodeServer *grpc.Server
+	tr         *rpcTransport.Manager
+	isClosed   bool
+}
+
+func New(id, addr, httpAddr string, fn ...Options) (*Store, error) {
+	opts := defaultOption
+	for _, opt := range fn {
+		opt(&opts)
+	}
+
+	// fsm implementation
+	kv, err := backend.NewBoltStore(opts.dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.logger.Debug("setup kv store is done")
+
+	// tranport
+	tr := rpcTransport.New(
+		raft.ServerAddress(addr),
+		[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+	)
+	opts.logger.Debug("setup raft transport is done")
+
+	node, err := newRaftNode(id, opts.dir, opts.applyTimeout, kv, tr.Transport(), opts.loglevel)
+	if err != nil {
+		return nil, err
+	}
+	opts.logger.Debug("setup raft node is done")
+	s := Store{
+		opts:       &opts,
+		node:       node,
+		db:         kv,
+		raftAddr:   addr,
+		httpAddr:   httpAddr,
+		errC:       make(chan error),
+		nodeServer: nil,
+		tr:         tr,
+		isClosed:   false,
+	}
+
+	if opts.isBootstrap {
+		s.opts.logger.Debug("bootstraping")
+		if err := node.bootstraping(id, addr); err != nil {
+			return nil, err
 		}
+	}
+	opts.logger.Debug("setup store is done")
+
+	go func() {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			s.opts.logger.Error(err.Error())
+		}
+		s.runGRPCServer(listener)
+		if err := listener.Close(); err != nil {
+			s.opts.logger.Error(err.Error())
+		}
+	}()
+	// go s.runHttpServer(listener)
+	opts.logger.Debug("setup node-rpc is done")
+
+	return &s, nil
+}
+
+func (s *Store) runGRPCServer(listener net.Listener) {
+	credential := insecure.NewCredentials()
+	svr := grpc.NewServer(grpc.Creds(credential))
+	nrh := nodeRpcHandler{
+		node:                       s,
+		cluster:                    s,
+		UnimplementedCommandServer: storepb.UnimplementedCommandServer{},
+		UnimplementedClusterServer: storepb.UnimplementedClusterServer{},
+	}
+
+	//grpc handler
+	storepb.RegisterCommandServer(svr, &nrh)
+	storepb.RegisterClusterServer(svr, &nrh)
+
+	//grpc intra node transport
+	s.tr.Register(svr)
+	reflection.Register(svr)
+
+	//run server
+	s.nodeServer = svr
+	s.errC <- svr.Serve(listener)
+	close(s.errC)
+}
+
+// add node into cluster
+func (s *Store) Join(nodeID, addr string) error {
+	return s.node.AddNode(nodeID, addr)
+}
+
+func (s *Store) Remove(nodeID string) error {
+	f := s.node.RemoveServer(raft.ServerID(nodeID), 0, s.opts.applyTimeout)
+	if f.Error() != nil {
 		return f.Error()
 	}
+	return nil
+}
 
-	// response should pb response
-	res, ok := f.Response().(*storeproto.CmdResponse)
-	if !ok {
-		return fmt.Errorf("wrong command response type [%T]", f.Response())
+func (s *Store) Leader() (string, string) {
+	addr, id := s.node.LeaderWithID()
+	return string(addr), string(id)
+}
+
+// return listener addr
+func (s *Store) Addr() string {
+	return s.raftAddr
+}
+
+func (s *Store) Close() error {
+	var err error
+	timeout := time.NewTimer(5 * time.Second)
+
+	// sd := make(chan struct{})
+	// go func() {
+	// 	s.nodeServer.GracefulStop()
+	// 	close(sd)
+	// }()
+
+	// select {
+	// case <-timeout.C:
+	// 	s.opts.logger.Warn("failed shutdown store-node")
+	// 	s.nodeServer.Stop()
+	// case <-sd:
+	// case e := <-s.errC:
+	// 	if e != nil {
+	// 		err = errors.Join(err, e)
+	// 	}
+	// }
+	s.nodeServer.Stop()
+	s.opts.logger.Debug("store-grpc-api closed")
+
+	timeout.Reset(5 * time.Second)
+	sd2 := make(chan struct{})
+	go func() {
+		if xerr := s.node.Close(); xerr != nil {
+			err = errors.Join(err, xerr)
+		}
+
+		close(sd2)
+	}()
+
+	select {
+	case <-timeout.C:
+		s.opts.logger.Warn("failed closing store-node")
+	case <-sd2:
+		s.opts.logger.Debug("store-node closed")
 	}
 
-	out.Msg = res.Msg
-	out.Err = res.Err
-	return nil
+	if xerr := s.db.Close(); xerr != nil {
+		err = errors.Join(err, xerr)
+	}
+	s.opts.logger.Debug("store-db closed")
+
+	if xerr := s.tr.Close(); xerr != nil {
+		err = errors.Join(err, xerr)
+	}
+	s.opts.logger.Debug("store-transport closed")
+
+	if s.opts.isPurge {
+		s.opts.logger.Info("purging")
+		xerr := os.RemoveAll(s.opts.dir)
+		if xerr != nil {
+			err = errors.Join(err, fmt.Errorf("purge error:%s", xerr))
+		}
+	}
+
+	timeout.Stop()
+	return err
 }
 
 // command use to mutate the state of node in cluster
 // error return is from raft system.
-func (s *Store) Command(cmd CMDType, key, value []byte, v *CommandResponse) error {
-	if v == nil {
-		return fmt.Errorf("v cannot be nil")
-	}
-
+func (s *Store) Command(_ context.Context, cmd CMDType, args ...[]byte) (*CommandResponse, error) {
 	// node use protobuf  wire format to exchange data inside cluster
-	cr := &storeproto.CmdRequestPayload{
-		Key:   key,
-		Value: value,
-	}
+	cr := &storepb.CmdRequestPayload{}
 	switch cmd {
-	case "set":
-		cr.Cmd = storeproto.Command_Type_Set
-	case "delete":
-		cr.Cmd = storeproto.Command_Type_Delete
+	case SET_CMD_TYPE:
+		if len(args) != 2 {
+			return nil, fmt.Errorf("wrong args count, expected 2")
+		}
+		cr.Cmd = storepb.Command_Type_Set
+		cr.Key = args[0]
+		cr.Value = args[1]
+
+	case DELETE_CMD_TYPE:
+		if len(args) < 1 {
+			return nil, fmt.Errorf("wrong args count, expected 1")
+		}
+		cr.Cmd = storepb.Command_Type_Delete
+		cr.Key = args[0]
 
 	default:
-		return fmt.Errorf("unknown command %v", cmd)
+		return nil, fmt.Errorf("invalid command %v", cmd)
 	}
-
 	//encode cmd into protobuf
 	b, err := proto.Marshal(cr)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	f := s.raft.Apply(b, 2*time.Second)
+
+	f := s.node.Apply(b, s.opts.applyTimeout)
 	if f.Error() != nil {
-		return f.Error()
+		return nil, f.Error()
 	}
 
 	// response should pb response
-	res, ok := f.Response().(*storeproto.CmdResponse)
+	res, ok := f.Response().(*storepb.CmdResponse)
 	if !ok {
-		return fmt.Errorf("wrong command response type [%T]", f.Response())
+		return nil, fmt.Errorf("wrong command response type [%T]", f.Response())
 	}
 
 	// convert into expected response from func argument
-	v.Cmd = "set"
+	v := &CommandResponse{}
 	v.Message = res.Msg
-	if res.Err != "" {
-		v.Err = errors.New(res.Err)
-	}
-	return nil
+
+	return v, err
 }
 
-// query use to get the current value directly from node
-func (s *Store) Query(ctx context.Context, cmd QueryType, args ...[]byte) (*QueryResponse, error) {
-	var res QueryResponse
-	switch cmd {
-	case "get":
-		b, ok, err := s.db.Get([]byte(args[0]))
-		if err != nil {
-			res.Err = err
-		}
-		if !ok {
-			res.Message = "key not found"
-		} else {
-			res.Value = b
-		}
-	default:
-		res.Err = fmt.Errorf("invalid query command: %s", cmd)
-	}
-
-	return &res, nil
+func (s *Store) Get(ctx context.Context, key []byte) ([]byte, bool, error) {
+	return s.db.Get(key)
 }
 
-// func (s *Store) Join(ctx context.Context) error {
-// 	addr, id := s.GetLeader()
-// 	if addr != "" {
-// 		if err := s.cluster.Join(ctx, addr, s.raftAddr, s.id); err != nil {
-// 			return fmt.Errorf("store failed join cluster at node %v, address %v", id, addr)
+// // query use to get the current value directly from node
+// func (s *Store) Query(ctx context.Context, cmd QueryType, args ...[]byte) (*QueryResponse, error) {
+// 	var res QueryResponse
+// 	switch cmd {
+// 	case "get":
+// 		b, ok, err := s.db.Get([]byte(args[0]))
+// 		if err != nil {
+// 			return nil, err
 // 		}
+// 		if !ok {
+// 			return nil, fmt.Errorf("key not found")
+// 		} else {
+// 			res.Value = b
+// 		}
+// 	default:
+// 		return nil, fmt.Errorf("invalid query command: %s", cmd)
 // 	}
 
+// 	return &res, nil
 // }

@@ -19,19 +19,19 @@ func AddStore(svc *Service) {
 		mux: svc.mux,
 	}
 
-	router.handleCommand(http.MethodPost, "/command", svc.store, svc.cluster)
+	router.handleCommand(http.MethodPost, "/command", svc.store)
 	router.handleQuery(http.MethodGet, "/query", svc.store)
 }
 
-func (s *storeService) handleCommand(method, path string, db *store.Store, clstr ClusterClient) {
+func (s *storeService) handleCommand(method, path string, db *store.Store) {
 	endpoint := fmt.Sprintf("%s %s", method, path)
 
 	s.mux.HandleFunc(endpoint, func(w http.ResponseWriter, r *http.Request) {
 
-		// is leader ?
-		if ok := s.isRedirect(w, r, db, clstr); ok {
-			return
-		}
+		// // is leader ?
+		// if ok := s.isRedirect(w, r, db, clstr); ok {
+		// 	return
+		// }
 
 		defer r.Body.Close()
 		cmd := struct {
@@ -45,13 +45,13 @@ func (s *storeService) handleCommand(method, path string, db *store.Store, clstr
 			return
 		}
 
-		res := store.CommandResponse{}
-		if err := db.Command(store.CMDType(cmd.Cmd), []byte(cmd.Key), []byte(cmd.Value), &res); err != nil {
+		if res, err := db.Command(r.Context(), store.CMDType(cmd.Cmd), []byte(cmd.Key), []byte(cmd.Value)); err != nil {
 			writeErrResponse(w, err)
 			// s.logger.Error(err.Error())
 			return
+		} else {
+			writeResponse(w, map[string]any{"msg": res.Message})
 		}
-		writeResponse(w, map[string]any{"msg": res.Message, "err": res.Err})
 	})
 }
 
@@ -71,16 +71,13 @@ func (h *storeService) handleQuery(method, path string, db *store.Store) {
 			return
 		}
 
-		res, err := db.Query(r.Context(), store.QueryType(cmd["cmd"]), []byte(cmd["key"]))
+		res, _, err := db.Get(r.Context(), []byte(cmd["key"]))
 		if err != nil {
 			writeErrResponse(w, err)
 			return
+		} else {
+			writeResponse(w, map[string]any{"value": string(res)})
 		}
-		if res.Err != nil {
-			writeErrResponse(w, res.Err)
-			return
-		}
-		writeResponse(w, map[string]any{"value": string(res.Value)})
 	})
 }
 
@@ -88,7 +85,7 @@ func (h *storeService) handleQuery(method, path string, db *store.Store) {
 // either it redirect to actual leader or response error.
 // value is true only if current node is leader
 func (h *storeService) isRedirect(w http.ResponseWriter, r *http.Request, db *store.Store, clstr ClusterClient) bool {
-	raftLeader, _ := db.GetLeader()
+	raftLeader, _ := db.Leader()
 	current := db.Addr()
 	if raftLeader != current {
 		httpLeader, err := clstr.GetNodeAPI(r.Context(), raftLeader)
