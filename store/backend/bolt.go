@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +15,10 @@ import (
 	"github.com/odit-bit/scarlett/store/storepb"
 	"go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
+)
+
+const (
+	defaultOpenTimeout time.Duration = 5 * time.Second
 )
 
 type boltStore struct {
@@ -36,7 +41,7 @@ func NewBoltStore(path string) (*boltStore, error) {
 	// fpath := filepath.Join(path, "kv-bolt")
 
 	bolt, err := bbolt.Open(filepath.Join(path, "fsm-bolt"), 0755, &bbolt.Options{
-		Timeout: 5 * time.Second,
+		Timeout: defaultOpenTimeout,
 		NoSync:  true,
 	})
 	if err != nil {
@@ -149,10 +154,11 @@ func (b *boltStore) Apply(l *raft.Log) interface{} {
 // Restore implements raft.FSM.
 func (b *boltStore) Restore(snapshot io.ReadCloser) error {
 	// should mutex
-
+	log.Println("RESTORE")
 	b.mx.Lock()
 	defer b.mx.Unlock()
 	defer snapshot.Close()
+	defer log.Println("RESTORE FINISH")
 
 	path := b.bolt.Path()
 
@@ -162,11 +168,13 @@ func (b *boltStore) Restore(snapshot io.ReadCloser) error {
 	}
 
 	//open file
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR, 0755)
 	if err != nil {
 		return err
 	}
-
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
 	// copy from snapshot
 	if _, err := io.Copy(f, snapshot); err != nil {
 		f.Close()
@@ -175,7 +183,9 @@ func (b *boltStore) Restore(snapshot io.ReadCloser) error {
 	f.Close()
 
 	//open with bolt
-	bolt, err := bbolt.Open(path, 0755, &bbolt.Options{Timeout: 5 * time.Second, NoSync: true})
+	bolt, err := bbolt.Open(path, 0755, &bbolt.Options{
+		Timeout: defaultOpenTimeout,
+		NoSync:  true})
 	if err != nil {
 		return err
 	}
@@ -185,16 +195,8 @@ func (b *boltStore) Restore(snapshot io.ReadCloser) error {
 
 // Snapshot implements raft.FSM.
 func (b *boltStore) Snapshot() (raft.FSMSnapshot, error) {
-	path := b.bolt.Path()
-	readOnly, err := bbolt.Open(path, os.ModePerm, &bbolt.Options{
-		ReadOnly: true,
-		// MmapFlags: syscall.MAP_POPULATE,
-	})
-	if err != nil {
-		return nil, err
-	}
 	return &boltSnapshot{
-		bolt: readOnly,
+		bolt: b.bolt,
 	}, nil
 }
 
@@ -206,21 +208,6 @@ type boltSnapshot struct {
 
 // Persist implements raft.FSMSnapshot.
 func (bs *boltSnapshot) Persist(sink raft.SnapshotSink) error {
-	// tx, err := bs.bolt.Begin(false)
-	// if err != nil {
-	// 	sink.Cancel()
-	// 	return err
-	// }
-	// defer tx.Rollback()
-	// tx.WriteFlag = syscall.O_DIRECT
-
-	// if _, err := tx.WriteTo(sink); err != nil {
-	// 	tx.Rollback()
-	// 	sink.Cancel()
-	// 	return err
-	// }
-	// return sink.Close()
-
 	err := bs.bolt.View(func(tx *bbolt.Tx) error {
 		tx.WriteFlag = syscall.O_DIRECT
 		if _, err := tx.WriteTo(sink); err != nil {

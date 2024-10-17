@@ -86,7 +86,7 @@ func main() {
 		mainLogger.Error(fmt.Sprintf("store-raft: %s", err.Error()))
 	}
 
-	close(sigC)
+	// close(sigC)
 	mainLogger.Info("shutdown")
 
 }

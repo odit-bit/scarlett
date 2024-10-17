@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -50,18 +49,18 @@ func generateKeyValueData(dur time.Duration, size int, addr string) {
 	// exec command
 	cli := storepb.NewCommandClient(conn)
 
-	data := bytes.Repeat([]byte{'x'}, size)
+	// data := bytes.Repeat([]byte{'x'}, size)
 	count := atomic.Int64{}
 	keys := "fizz"
 	timer := time.NewTimer(dur)
 
 	pref := 0
 	key := fmt.Sprintf("%s-%v", keys, pref)
-	value := fmt.Sprintf("%s-%v", data, pref)
+	// value := fmt.Sprintf("%s-%v", data, pref)
 	req := storepb.SetRequest{
 		Cmd:   storepb.Command_Type_Set,
 		Key:   []byte(key),
-		Value: []byte(value),
+		Value: []byte(time.Now().String()),
 	}
 	for {
 
@@ -72,7 +71,7 @@ func generateKeyValueData(dur time.Duration, size int, addr string) {
 			timer.Stop()
 			log.Println("finish")
 		default:
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			_, err := cli.Set(ctx, &req)
 			cancel()
 			if err == nil {
@@ -96,5 +95,5 @@ func main() {
 	}
 	seconds := time.Duration(dur) * time.Second
 	fmt.Println("run for", seconds)
-	generateKeyValueData(seconds, 4096, os.Args[1])
+	generateKeyValueData(seconds, 1024, os.Args[1])
 }

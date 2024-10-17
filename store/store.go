@@ -52,7 +52,7 @@ func New(id, addr, httpAddr string, fn ...Options) (*Store, error) {
 	}
 
 	// fsm implementation
-	kv, err := backend.NewBadgerStore(opts.dir)
+	kv, err := backend.NewBoltStore(opts.dir)
 	if err != nil {
 		return nil, err
 	}
@@ -155,32 +155,43 @@ func (s *Store) Addr() string {
 
 func (s *Store) Close() error {
 	var err error
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	go func() {
-		s.nodeServer.GracefulStop()
-		cancel()
-	}()
+	timeout := time.NewTimer(5 * time.Second)
 
-	select {
-	case <-ctx.Done():
-		e := ctx.Err()
-		if e != context.Canceled {
-			err = errors.Join(err, ctx.Err())
-		}
+	// sd := make(chan struct{})
+	// go func() {
+	// 	s.nodeServer.GracefulStop()
+	// 	close(sd)
+	// }()
 
-	case e := <-s.errC:
-		if e != nil {
-			err = errors.Join(err, e)
-		}
-	}
-
+	// select {
+	// case <-timeout.C:
+	// 	s.opts.logger.Warn("failed shutdown store-node")
+	// 	s.nodeServer.Stop()
+	// case <-sd:
+	// case e := <-s.errC:
+	// 	if e != nil {
+	// 		err = errors.Join(err, e)
+	// 	}
+	// }
 	s.nodeServer.Stop()
 	s.opts.logger.Debug("store-grpc-api closed")
 
-	if xerr := s.node.Close(); xerr != nil {
-		err = errors.Join(err, xerr)
+	timeout.Reset(5 * time.Second)
+	sd2 := make(chan struct{})
+	go func() {
+		if xerr := s.node.Close(); xerr != nil {
+			err = errors.Join(err, xerr)
+		}
+
+		close(sd2)
+	}()
+
+	select {
+	case <-timeout.C:
+		s.opts.logger.Warn("failed closing store-node")
+	case <-sd2:
+		s.opts.logger.Debug("store-node closed")
 	}
-	s.opts.logger.Debug("store-node closed")
 
 	if xerr := s.db.Close(); xerr != nil {
 		err = errors.Join(err, xerr)
@@ -199,6 +210,8 @@ func (s *Store) Close() error {
 			err = errors.Join(err, fmt.Errorf("purge error:%s", xerr))
 		}
 	}
+
+	timeout.Stop()
 	return err
 }
 
@@ -226,7 +239,6 @@ func (s *Store) Command(_ context.Context, cmd CMDType, args ...[]byte) (*Comman
 	default:
 		return nil, fmt.Errorf("invalid command %v", cmd)
 	}
-
 	//encode cmd into protobuf
 	b, err := proto.Marshal(cr)
 	if err != nil {
@@ -247,6 +259,7 @@ func (s *Store) Command(_ context.Context, cmd CMDType, args ...[]byte) (*Comman
 	// convert into expected response from func argument
 	v := &CommandResponse{}
 	v.Message = res.Msg
+
 	return v, err
 }
 
