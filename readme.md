@@ -19,9 +19,8 @@ git clone https://github.com/odit-bit/scarlett
 cd ./scarlett
 
 # build exe file
-go build ./cmd/scarlettd
+go build -o ./cmd/scarlettd ./bin/scarlettd
 ```
-or use prebuilt execute file from `./bin/scarlettd`
 - run the node  
 ``` shell 
 
